@@ -87,36 +87,54 @@ type scanCand struct {
 	id types.TxnId
 }
 
+// scanChunk bounds how many specLog entries a scan inspects per lane-lock hold. After a
+// failure the specLog can hold tens of thousands of entries; walking a whole lane under
+// its lock every tick (three scans per tick) stalled the lane goroutines and fed a
+// spiral (fewer commits → a bigger specLog → longer scans).
+const scanChunk = 512
+
 // scanBudgeted runs act (lane lock held) on specLog entries satisfying want, at most
 // budget of them (0 = all), smallest OrderKey first: execution runs in OrderKey order,
 // so after a view change the oldest entries are the ones blocking it. Candidates are
-// collected one lane at a time and re-checked under the lane lock before acting.
+// collected scanChunk entries per lane-lock hold (the heap may change between chunks,
+// so an entry can be missed this tick or seen twice; duplicates are dropped) and
+// re-checked under the lane lock before acting.
 func (o *Orderer) scanBudgeted(budget int, want func(e *types.TxnEntry, now uint64) bool,
 	act func(s *shard, id types.TxnId, e *types.TxnEntry, now uint64)) {
 	var cand []scanCand
 	for _, s := range o.shards {
-		s.mu.Lock()
-		now := o.clk.Now()
-		s.spec.ForEach(func(id types.TxnId, e *types.TxnEntry) {
-			if want(e, now) {
-				cand = append(cand, scanCand{e.Order(), id})
+		for i := 0; ; {
+			s.mu.Lock()
+			n := s.spec.Len()
+			if i >= n {
+				s.mu.Unlock()
+				break
 			}
-		})
-		s.mu.Unlock()
+			end := min(n, i+scanChunk)
+			now := o.clk.Now()
+			for ; i < end; i++ {
+				id, e := s.spec.At(i)
+				if want(e, now) {
+					cand = append(cand, scanCand{e.Order(), id})
+				}
+			}
+			s.mu.Unlock()
+		}
 	}
 	if len(cand) == 0 {
 		return
 	}
+	slices.SortFunc(cand, func(a, b scanCand) int {
+		if a.ok.Less(b.ok) {
+			return -1
+		}
+		if b.ok.Less(a.ok) {
+			return 1
+		}
+		return 0
+	})
+	cand = slices.CompactFunc(cand, func(a, b scanCand) bool { return a.id == b.id })
 	if budget > 0 && len(cand) > budget {
-		slices.SortFunc(cand, func(a, b scanCand) int {
-			if a.ok.Less(b.ok) {
-				return -1
-			}
-			if b.ok.Less(a.ok) {
-				return 1
-			}
-			return 0
-		})
 		cand = cand[:budget]
 	}
 	byLane := make([][]types.TxnId, len(o.shards))

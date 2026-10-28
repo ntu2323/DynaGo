@@ -673,5 +673,19 @@ Next levers: deadline/OWD calibration (late arrivals), a second sender (one run 
 - Both look like data races that x86's stronger memory ordering hides. The same code was clean at 200k on c220g2.
 - IONIA's capacity on these nodes, when it doesn't fail, is about 40k: less than C++ DYNA (~50k) and Go DYNA (72–84k).
 
-Not run this round: failover under load, Pebble on the cluster.
+**Failover on the m400s** (`run_cluster_bench.py --kill-replica N --kill-at-sec 10 [--restart-at-sec 15]`, `-e 30`; Go config as above; C++ 3 lanes / 2 rx / 1 sender; loads are total ops/s):
+
+| Scenario | Go 12k | Go 36k | Go 60k | C++ 12k | C++ 36k |
+|---|---|---|---|---|---|
+| Kill follower r1 | ✅ 100%; view 1 ~1.06 s after the kill (the 1 s failure timeout), one ~1 s dip then catch-up | ✅ 100%, same shape | ✅ view 1, but the two survivors hold only ~20–24k against 60k offered (21–37% completed) | ✅ 100% | ✅ view 1, survivors ~18–20k (56%) |
+| Kill VR leader r0, restart at +6 s | ✅ 100%; caught up (1000 keys, 24 txns) and view 2 ~5 s after restart | ✅ 100% (1000 keys, 156 txns) | ❌ catch-up of 86k txns finishes, but the overloaded survivors stop answering heartbeats and view 2 never installs | ✅ 100% | ❌ same failure (26k txns caught up, then a stall) |
+| Kill r2, restart (home-range handback) | ✅ 100%, view 2 | — | — | — | — |
+
+- **Fixed during this round: background scans walked the whole specLog under the lane lock.** After a kill at 60k the specLog grows to tens of thousands of entries. Three scans per 50 ms tick each walked every lane under its lock (`maxTick` 100–600 ms, lane iterations 0.2–1.3 s), and throughput decayed to ~1k ops/s.
+  - `scanBudgeted` now collects candidates 512 entries per lock hold (`pq.At`), then sorts, dedups, and applies the budget.
+  - The survivors now sustain ~20–24k at 60k offered.
+- **Still failing:** kill+restart when the offered load is far above what two replicas can commit (60k offered against ~22k). The backlog grows without bound (specLog 350k, executor passes ~0.5 s), and the rejoin's view change can't complete. The C++ fails the same way, already at 36k. A fix would be admission control while degraded: shed client requests by specLog size or commit rate, not only by lane queue length.
+- **Harness fix:** `gcp_bench_common.py` cleanup now deletes stale `~/bench/*.killed.log`. A previous kill+restart run's pre-kill log was being fetched again and failing the next run's check.
+
+Not run this round: Pebble on the cluster.
 

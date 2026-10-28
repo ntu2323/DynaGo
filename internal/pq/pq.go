@@ -96,6 +96,10 @@ func (q *IndexedMinPQ[ID, V]) ForEach(f func(id ID, v *V)) {
 	}
 }
 
+// At is the entry at heap position i (0 <= i < Len()), for scans that walk the heap
+// in slices and may release a lock between them.
+func (q *IndexedMinPQ[ID, V]) At(i int) (ID, *V) { return q.heap[i].id, q.heap[i].v }
+
 // Clear drops every entry.
 func (q *IndexedMinPQ[ID, V]) Clear() {
 	clear(q.heap)
