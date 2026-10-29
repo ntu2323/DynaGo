@@ -95,3 +95,25 @@ func TestTxnQuorum_RepliesFromAnotherViewIgnored(t *testing.T) {
 		t.Fatal()
 	}
 }
+
+func TestTxnQuorum_LeadersMovedOff(t *testing.T) {
+	q := New(set(0), 2, 0)
+	if q.LeadersMovedOff(100) {
+		t.Fatal("no leader reply yet")
+	}
+	q.AddReply(0, 0, 100, true)
+	if q.LeadersMovedOff(100) {
+		t.Fatal("leader at the request's t")
+	}
+	q.AddReply(0, 0, 130, true) // re-timestamped
+	if !q.LeadersMovedOff(100) {
+		t.Fatal()
+	}
+	// Two leaders forming the quorum on their own can still fast-commit at their t.
+	q2 := New(set(0, 1), 2, 0)
+	q2.AddReply(0, 0, 130, true)
+	q2.AddReply(1, 0, 130, true)
+	if q2.LeadersMovedOff(100) || !q2.FastReady() {
+		t.Fatal()
+	}
+}

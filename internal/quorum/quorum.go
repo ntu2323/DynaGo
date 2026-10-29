@@ -104,6 +104,15 @@ func (q *TxnQuorum) LeadersDisagree() bool {
 	return !ok
 }
 
+// LeadersMovedOff: all leaders agree on a t other than the request's own reqT (a late
+// leader re-timestamped it) and the leaders alone are short of a quorum. Followers only
+// SpecReply with reqT (on time) or stay silent (late), so no quorum can form at the
+// leaders' t without a SlowCommit: waiting for the slow timeout gains nothing.
+func (q *TxnQuorum) LeadersMovedOff(reqT uint64) bool {
+	_, t, ok := q.LeadersAgree()
+	return ok && t != reqT && q.leaders.Count() < q.quorum
+}
+
 // AgreedT is the common leader t (0 if they don't agree).
 func (q *TxnQuorum) AgreedT() uint64 {
 	_, t, _ := q.LeadersAgree()

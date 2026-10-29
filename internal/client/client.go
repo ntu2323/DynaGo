@@ -63,7 +63,7 @@ type pending struct {
 	owd       uint64 // READ: grows each retry
 	sendUS    uint64
 	invokeUS  uint64
-	slowCause uint8 // 0 fast, 1 leaders disagreed, 2 timeout
+	slowCause uint8 // 0 fast, 1 leaders disagreed, 2 timeout, 3 late leader re-timestamped
 	resends   uint32
 	dueGen    uint64
 	restart   bool // view change: resend (same t) on its turn
@@ -91,8 +91,8 @@ type Options struct {
 }
 
 type Stats struct {
-	Fast, SlowDisagree, SlowTimeout, ViaCommitReply, ResendWrite, RetryRead uint64
-	ResendSlowCommit                                                        uint64 // SlowCommit re-sent: no CommitReply quorum within the resend delay
+	Fast, SlowDisagree, SlowTimeout, SlowLateLeader, ViaCommitReply, ResendWrite, RetryRead uint64
+	ResendSlowCommit                                                                        uint64 // SlowCommit re-sent: no CommitReply quorum within the resend delay
 }
 
 type Client struct {
@@ -117,6 +117,7 @@ type Client struct {
 	tokens      float64
 	lastSweep   uint64
 	slowTimeout uint64
+	earlySlow   bool // slow path at once when a late leader re-timestamped (DYNA_EARLY_SLOW)
 	fastMax     int
 	fastFlushUS uint64
 	fastBatch   []wire.FastCommit
@@ -139,6 +140,7 @@ func New(o Options) *Client {
 		resendUS:    max(1, deadline.EnvU64("DYNA_RESEND_TIMEOUT_MS", 30)) * 1000,
 		resendRate:  deadline.EnvU64("DYNA_RESEND_RATE", 1000),
 		slowTimeout: deadline.EnvU64("DYNA_SLOW_TIMEOUT_US", 2000),
+		earlySlow:   deadline.EnvU64("DYNA_EARLY_SLOW", 1) != 0,
 		fastMax:     int(max(1, deadline.EnvU64("DYNA_FAST_BATCH", 32))),
 		fastFlushUS: max(1, deadline.EnvU64("DYNA_FAST_FLUSH_US", 200)),
 	}
@@ -282,6 +284,9 @@ func (c *Client) sendSlowCommit(p *pending) {
 		if p.q.LeadersDisagree() {
 			p.slowCause = 1
 			c.stats.SlowDisagree++
+		} else if p.q.LeadersMovedOff(p.t) {
+			p.slowCause = 3
+			c.stats.SlowLateLeader++
 		} else {
 			p.slowCause = 2
 			c.stats.SlowTimeout++
@@ -446,7 +451,7 @@ func (c *Client) handleSpecReply(r *wire.SpecReply) {
 				c.queueFast(wire.FastCommit{ClientID: c.id, RequestID: p.reqID, ViewID: c.view, AgreedT: t})
 			}
 			c.commit(p, t)
-		case !p.isRead && p.q.LeadersDisagree():
+		case !p.isRead && (p.q.LeadersDisagree() || (c.earlySlow && p.q.LeadersMovedOff(p.t))):
 			c.sendSlowCommit(p)
 		case !p.isRead && p.q.AllLeadersPresent():
 			// The slow-path timer starts once every leader replied.

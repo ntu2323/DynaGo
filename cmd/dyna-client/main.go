@@ -287,6 +287,7 @@ func main() {
 		st.Fast += s.Fast
 		st.SlowDisagree += s.SlowDisagree
 		st.SlowTimeout += s.SlowTimeout
+		st.SlowLateLeader += s.SlowLateLeader
 		st.ResendWrite += s.ResendWrite
 		st.RetryRead += s.RetryRead
 		st.ResendSlowCommit += s.ResendSlowCommit
@@ -346,6 +347,6 @@ func main() {
 	for i := len(lat) - 1; i >= 0 && lat[i] > 25*time.Millisecond; i-- {
 		over++
 	}
-	fmt.Printf("client stats: fast=%d slow[disagree=%d timeout=%d] resendW=%d resendSlowCommit=%d retryR=%d (measured slow=%d, >25ms=%d)\n",
-		st.Fast, st.SlowDisagree, st.SlowTimeout, st.ResendWrite, st.ResendSlowCommit, st.RetryRead, slow, over)
+	fmt.Printf("client stats: fast=%d slow[disagree=%d timeout=%d lateLeader=%d] resendW=%d resendSlowCommit=%d retryR=%d (measured slow=%d, >25ms=%d)\n",
+		st.Fast, st.SlowDisagree, st.SlowTimeout, st.SlowLateLeader, st.ResendWrite, st.ResendSlowCommit, st.RetryRead, slow, over)
 }
